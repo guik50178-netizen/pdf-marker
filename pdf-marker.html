@@ -1,0 +1,1448 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>緑マーカー & 赤シート</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="緑マーカー">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script src="pdf.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #f0f0ec; font-family: 'Helvetica Neue', sans-serif; min-height: 100vh; }
+
+/* ── Toolbar ── */
+#toolbar {
+  position: sticky; top: 0; z-index: 100;
+  background: #fff; border-bottom: 1px solid #ddd;
+  padding: 8px 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+#toolbar h1 { font-size: 13px; font-weight: 600; color: #333; white-space: nowrap; }
+
+.btn {
+  padding: 6px 12px; border: 1px solid #ccc; border-radius: 7px;
+  font-size: 12px; font-weight: 500; cursor: pointer; background: #fff;
+  color: #333; transition: background .12s; white-space: nowrap;
+  -webkit-tap-highlight-color: transparent; user-select: none;
+  /* タップしやすい最小高さ */
+  min-height: 34px; display: inline-flex; align-items: center; justify-content: center;
+}
+label.btn { display: inline-flex; }
+.btn:hover  { background: #f5f5f5; }
+.btn:active { background: #eee; transform: scale(.97); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* 赤シート */
+#toggleBtn.red   { background: #fee; border-color: #f99; color: #c33; }
+#toggleBtn.green { background: #efe; border-color: #8c8; color: #363; }
+
+/* マーカーモード — 目立たせる */
+#drawModeBtn       { border-color: #aaa; }
+#drawModeBtn.on    { background: #fffbe6; border-color: #f0b429; color: #7a5200; font-weight: 600; }
+#eraseModeBtn.on   { background: #ffe8e8; border-color: #e57373; color: #a22; font-weight: 600; }
+#testBtn.on        { background: #e8f0fe; border-color: #5a8fc0; color: #1a4080; font-weight: 600; }
+
+#eraseBanner {
+  display: none; position: sticky; top: 56px; z-index: 99;
+  background: #ffe8e8; border-bottom: 1px solid #e57373;
+  padding: 6px 14px; font-size: 12px; color: #a22; text-align: center;
+}
+#eraseBanner.show { display: block; }
+
+#testBar {
+  display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 99;
+  background: #e8f0fe; border-top: 2px solid #5a8fc0;
+  padding: 12px 14px; font-size: 13px; color: #1a4080;
+  align-items: center; gap: 12px; flex-wrap: wrap;
+  box-shadow: 0 -2px 12px rgba(0,0,0,.1);
+  /* セーフエリア対応（iPhoneのホームバー領域） */
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+#testBar.show { display: flex; }
+#testInfo { display: flex; gap: 14px; align-items: center; }
+#testProgress { font-weight: 600; font-size: 14px; }
+#testScore { color: #456; }
+#testCtrls { display: flex; gap: 8px; margin-left: auto; }
+#testCtrls button {
+  padding: 10px 16px; border: 1px solid #5a8fc0; border-radius: 8px;
+  background: #fff; color: #1a4080; font-size: 14px; font-weight: 600; cursor: pointer;
+  min-height: 44px; /* タップしやすい高さ */
+}
+#testCtrls button:hover { background: #d4e3f8; }
+#testCtrls button:active { transform: scale(.97); }
+
+/* テスト中はPDF下部に余白を追加（固定バーと重ならないように） */
+body.testing #pdfContainer { padding-bottom: 100px; }
+
+/* 保存先確定後 */
+#saveBtn.linked { background: #f0f7f0; border-color: #6a6; color: #363; }
+
+.sep { width: 1px; height: 22px; background: #e0e0e0; flex-shrink: 0; }
+
+#statusTxt   { font-size: 11px; color: #999; margin-left: auto; white-space: nowrap; }
+#badge       { font-size: 11px; color: #4a4; display: none; }
+#badge.show  { display: inline; }
+#savePathTxt { font-size: 11px; color: #888; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Draw mode banner ── */
+#drawBanner {
+  display: none; position: sticky; top: 56px; z-index: 99;
+  background: #fffbe6; border-bottom: 1px solid #f0b429;
+  padding: 6px 14px; font-size: 12px; color: #7a5200;
+  text-align: center; align-items: center; justify-content: center;
+  gap: 16px; flex-wrap: wrap;
+}
+#drawBanner.show { display: flex; }
+
+/* カーソル切り替えボタン */
+.cursor-ctrl { display: inline-flex; align-items: center; gap: 4px; }
+.ccbtn {
+  padding: 3px 8px; border: 1px solid #e0b060; border-radius: 4px;
+  background: #fff; color: #7a5200; font-size: 11px; cursor: pointer;
+}
+.ccbtn:hover { background: #fff3d0; }
+.ccbtn.active { background: #f0b429; color: #fff; border-color: #c58c00; }
+
+/* カーソル固定クラス — body側で制御 */
+body.draw-mode.cursor-black .pgwrap,
+body.draw-mode.cursor-black .dwc { cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><line x1="12" y1="2" x2="12" y2="22" stroke="black" stroke-width="1.5"/><line x1="2" y1="12" x2="22" y2="12" stroke="black" stroke-width="1.5"/></svg>') 12 12, crosshair; }
+body.draw-mode.cursor-white .pgwrap,
+body.draw-mode.cursor-white .dwc { cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><line x1="12" y1="2" x2="12" y2="22" stroke="white" stroke-width="1.5"/><line x1="2" y1="12" x2="22" y2="12" stroke="white" stroke-width="1.5"/></svg>') 12 12, crosshair; }
+
+/* ── PDF area ── */
+#pdfContainer {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 16px 12px; gap: 14px;
+}
+#dropZone {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; height: 60vh;
+  color: #bbb; font-size: 14px; text-align: center; padding: 20px;
+}
+
+.pgwrap {
+  position: relative;
+  box-shadow: 0 2px 12px rgba(0,0,0,.15);
+  border-radius: 2px;
+  display: inline-block;
+  /* デフォルト: スクロール・ピンチズーム自由 */
+  touch-action: auto;
+}
+.pgwrap canvas { display: block; border-radius: 2px; }
+.hlc { position: absolute; top: 0; left: 0; pointer-events: none; border-radius: 2px; }
+.dwc {
+  position: absolute; top: 0; left: 0; border-radius: 2px;
+  /* デフォルト: タッチはスルー（スクロール等はbrowserに任せる） */
+  touch-action: auto;
+  cursor: default;
+}
+/* マーカーモードON時 */
+body.draw-mode .pgwrap { cursor: crosshair; }
+body.draw-mode .dwc    { touch-action: none; cursor: crosshair; }
+
+/* ── 付箋メモ ── */
+.sticky-note {
+  position: absolute; min-width: 100px; min-height: 32px; max-width: 240px;
+  background: #fff59d; border: 1px solid #fbc02d;
+  border-radius: 4px; padding: 8px 10px; font-size: 12px;
+  color: #5d4037; line-height: 1.5;
+  box-shadow: 2px 3px 6px rgba(0,0,0,.15);
+  cursor: move; user-select: none;
+  word-wrap: break-word; white-space: pre-wrap;
+  z-index: 50;
+}
+.sticky-note.editing {
+  cursor: text; user-select: text;
+  outline: 2px solid #ffa000;
+}
+.sticky-note-delete {
+  position: absolute; top: -8px; right: -8px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: #e57373; color: #fff; border: none;
+  font-size: 12px; line-height: 1; cursor: pointer;
+  display: none; align-items: center; justify-content: center;
+  padding: 0;
+}
+.sticky-note:hover .sticky-note-delete { display: flex; }
+/* テスト中は薄く */
+body.testing .sticky-note { opacity: .3; }
+
+/* toast */
+#toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: #333; color: #fff; font-size: 12px; padding: 8px 18px;
+  border-radius: 20px; display: none; z-index: 300;
+  white-space: nowrap; pointer-events: none;
+}
+#toast.show { display: block; }
+
+/* 統計モーダル */
+#statsModal, #helpModal {
+  display: none; position: fixed; inset: 0; z-index: 250;
+  background: rgba(0,0,0,.5); align-items: center; justify-content: center;
+  padding: 20px;
+}
+#statsModal.open, #helpModal.open { display: flex; }
+#statsPanel, #helpPanel {
+  background: #fff; border-radius: 12px; padding: 20px 24px;
+  width: min(520px, 100%); max-height: 85vh; overflow-y: auto;
+  box-shadow: 0 10px 40px rgba(0,0,0,.3);
+}
+#statsPanel h2, #helpPanel h2 { font-size: 16px; color: #333; margin-bottom: 16px; }
+#statsPanel h3, #helpPanel h3 { font-size: 13px; color: #666; margin: 16px 0 8px; font-weight: 600; }
+.stat-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; border-bottom: 1px solid #f0f0f0; }
+.stat-row:last-child { border-bottom: none; }
+.stat-row .key { color: #666; }
+.stat-row .val { color: #333; font-weight: 600; }
+.stat-bar { background: #eee; border-radius: 4px; height: 8px; margin: 8px 0; overflow: hidden; }
+.stat-bar-fill { background: #4caf50; height: 100%; transition: width .3s; }
+.stats-close {
+  margin-top: 16px; padding: 8px 16px; border: 1px solid #ccc; border-radius: 6px;
+  background: #fff; cursor: pointer; font-size: 13px; width: 100%;
+}
+.stats-close:hover { background: #f5f5f5; }
+.stat-category {
+  display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px;
+}
+.stat-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+
+/* ヘルプ用 */
+.help-section { margin-bottom: 14px; }
+.help-section p { font-size: 13px; line-height: 1.7; color: #444; }
+.help-section ul { padding-left: 20px; font-size: 13px; line-height: 1.7; color: #444; }
+.help-section li { margin-bottom: 4px; }
+.help-section code {
+  background: #f3f3f3; padding: 1px 6px; border-radius: 4px;
+  font-size: 12px; color: #c33;
+}
+.help-color-sample {
+  display: inline-block; width: 16px; height: 12px; border-radius: 3px;
+  vertical-align: middle; margin-right: 4px; border: 1px solid rgba(0,0,0,.1);
+}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>📗 緑マーカー</h1>
+
+  <label class="btn" for="fi">📂 ファイルを開く</label>
+  <input type="file" id="fi" accept=".pdf,application/pdf,image/*,.json,application/json" multiple style="display:none">
+  <button id="saveBtn"    class="btn" onclick="saveOverwrite()">💾 保存</button>
+  <button id="saveAsBtn"  class="btn" onclick="saveAsNew()">📌 新規保存</button>
+
+  <div class="sep"></div>
+
+  <!-- マーカーモード（タッチ時の描画/スクロール切り替え） -->
+  <button id="drawModeBtn"  onclick="toggleDrawMode()">✏️ 描画OFF</button>
+  <button id="eraseModeBtn" onclick="toggleEraseMode()">🧽 消しゴムOFF</button>
+  <button id="toggleBtn"    onclick="toggleSheet()">🟥 赤シートOFF</button>
+  <button id="testBtn"      onclick="startTest()">🎯 テスト開始</button>
+  <button onclick="addNote()">📝 メモ追加</button>
+  <button onclick="showStats()">📊 統計</button>
+  <button onclick="showHelp()">❓ 使い方</button>
+  <button onclick="undoLast()">↩</button>
+  <button onclick="clearAll()">🗑</button>
+
+  <span id="badge">✓ 保存済</span>
+  <span id="savePathTxt"></span>
+  <span id="statusTxt">—</span>
+</div>
+
+<!-- マーカーモードON時のバナー -->
+<div id="drawBanner">
+  <span>✏️ 描画モードON — ドラッグでマーカーを引けます。スクロールするには描画をOFFにしてください。</span>
+  <span class="cursor-ctrl">
+    カーソル:
+    <button class="ccbtn active" data-cursor="auto" onclick="setCursor('auto')">自動</button>
+    <button class="ccbtn" data-cursor="black" onclick="setCursor('black')">黒</button>
+    <button class="ccbtn" data-cursor="white" onclick="setCursor('white')">白</button>
+  </span>
+</div>
+<div id="eraseBanner">
+  🧽 消しゴムモードON — マーカーをタップすると削除されます。
+</div>
+
+<!-- テスト進捗バー -->
+<div id="testBar">
+  <div id="testInfo">
+    <span id="testProgress">0/0</span>
+    <span id="testScore">○ 0 / × 0</span>
+  </div>
+  <div id="testCtrls">
+    <button onclick="testJudge(false)">× わからない</button>
+    <button onclick="testJudge(true)">○ わかった</button>
+    <button onclick="endTest()" style="margin-left:8px">終了</button>
+  </div>
+</div>
+
+<div id="pdfContainer">
+  <div id="dropZone">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="1.2">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <polyline points="14 2 14 8 20 8"/>
+      <line x1="12" y1="12" x2="12" y2="18"/>
+      <line x1="9" y1="15" x2="15" y2="15"/>
+    </svg>
+    <span>PDF・画像・セッションファイルを選択してください</span>
+    <small style="font-size:11px;color:#ccc">画像は複数選択可 · ブラウザ内のみで処理（外部送信なし）</small>
+  </div>
+  <div id="pdfPages" style="display:none;flex-direction:column;align-items:center;gap:14px;width:100%"></div>
+</div>
+
+<div id="toast"></div>
+
+<div id="statsModal">
+  <div id="statsPanel">
+    <h2>📊 学習統計</h2>
+    <div id="statsContent"></div>
+    <button class="stats-close" onclick="closeStats()">閉じる</button>
+  </div>
+</div>
+
+<div id="helpModal">
+  <div id="helpPanel">
+    <h2>❓ 使い方</h2>
+    <div id="helpContent"></div>
+    <button class="stats-close" onclick="closeHelp()">閉じる</button>
+  </div>
+</div>
+
+<script>
+// ── pdf.js ロードチェック ─────────────────────────────────
+if (typeof pdfjsLib === 'undefined') {
+  // ライブラリが読み込めなかった場合のエラー表示
+  document.addEventListener('DOMContentLoaded', showLibLoadError);
+  // DOMが既に読み込まれていた場合
+  if (document.readyState !== 'loading') showLibLoadError();
+  throw new Error('pdfjsLib is not loaded');
+}
+
+function showLibLoadError() {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:999;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px;text-align:center;font-family:sans-serif;';
+  overlay.innerHTML = `
+    <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
+    <h2 style="color:#c33;font-size:18px;margin-bottom:12px;">PDF処理ライブラリが読み込めません</h2>
+    <p style="color:#555;font-size:14px;line-height:1.8;max-width:420px;margin-bottom:24px;">
+      通常はブラウザのキャッシュ不整合が原因です。<br>
+      以下を試してください：
+    </p>
+    <ol style="text-align:left;font-size:13px;line-height:2;color:#444;max-width:380px;margin-bottom:24px;">
+      <li>このページを<b>強制リロード</b>（PC: Ctrl+Shift+R / Mac: Cmd+Shift+R）</li>
+      <li>それでも直らない場合、ブラウザの<b>キャッシュをクリア</b>して再訪問</li>
+      <li>iPad Safariの場合: 設定 → Safari → 履歴とWebサイトデータを消去</li>
+    </ol>
+    <button onclick="location.reload(true)" style="padding:10px 24px;background:#1976d2;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer;">再読み込み</button>
+  `;
+  document.body.appendChild(overlay);
+}
+
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'pdf.worker.min.js';
+
+const FS_API = 'showSaveFilePicker' in window;
+
+// ── ページ離脱時の警告 ──────────────────────────────────
+// fileHandleが無い状態（＝ファイルに自動上書きされてない）で未保存変更があれば警告
+window.addEventListener('beforeunload', e => {
+  if (hasUnsavedChanges && !fileHandle) {
+    e.preventDefault();
+    e.returnValue = ''; // Chrome要件
+    return '';
+  }
+});
+
+// ── Service Worker 登録（オフライン対応） ─────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('service-worker.js')
+      .then(() => console.log('Service Worker 登録成功'))
+      .catch(err => console.warn('Service Worker 登録失敗:', err));
+  });
+}
+
+let hl = [], notes = [], redOn = false, drawMode = false, eraseMode = false;
+let fname = null, fsize = 0, pdfB64 = null, imagesB64 = [], fileHandle = null;
+let pageData = {}, drawing = false, dstart = null, apage = null;
+let bTimer = null, toastTimer = null;
+let suppressClick = false; // touchend後のclick重複発火を防ぐ
+let hasUnsavedChanges = false; // 未保存の変更があるかどうか
+
+// テスト状態
+let testOn = false;
+let testQueue = [];    // {page, index}の配列（マーカー参照）
+let testIndex = 0;
+let testScore = { ok: 0, ng: 0 };
+let testWrongList = []; // 今回のテストセッションで×をつけたマーカーの配列
+
+// ── モード管理（描画・消しゴムは相互排他） ──────────────────
+function toggleDrawMode() {
+  drawMode = !drawMode;
+  if (drawMode && eraseMode) toggleEraseMode(); // 相互排他
+  document.body.classList.toggle('draw-mode', drawMode);
+  const btn = document.getElementById('drawModeBtn');
+  btn.textContent = drawMode ? '✏️ 描画ON' : '✏️ 描画OFF';
+  btn.classList.toggle('on', drawMode);
+  document.getElementById('drawBanner').classList.toggle('show', drawMode);
+}
+
+// カーソル切り替え
+function setCursor(mode) {
+  document.body.classList.remove('cursor-black', 'cursor-white');
+  if (mode === 'black') document.body.classList.add('cursor-black');
+  else if (mode === 'white') document.body.classList.add('cursor-white');
+  // ボタンの選択状態を更新
+  document.querySelectorAll('.ccbtn').forEach(b => {
+    b.classList.toggle('active', b.dataset.cursor === mode);
+  });
+}
+
+function toggleEraseMode() {
+  eraseMode = !eraseMode;
+  if (eraseMode && drawMode) toggleDrawMode();
+  const btn = document.getElementById('eraseModeBtn');
+  btn.textContent = eraseMode ? '🧽 消しゴムON' : '🧽 消しゴムOFF';
+  btn.classList.toggle('on', eraseMode);
+  document.getElementById('eraseBanner').classList.toggle('show', eraseMode);
+}
+
+// ── ファイルを開く（PDF / 画像 / JSONセッション、複数可）────────
+document.getElementById('fi').addEventListener('change', async e => {
+  const files = Array.from(e.target.files); if (!files.length) return;
+
+  // JSONセッションがあれば復元優先
+  const jsonFile = files.find(f => f.name.toLowerCase().endsWith('.json') || f.type === 'application/json');
+  if (jsonFile) {
+    await restoreSession(jsonFile);
+    e.target.value = '';
+    return;
+  }
+
+  // PDFがあればPDFモード
+  const pdfFile = files.find(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  if (pdfFile) {
+    fname = pdfFile.name;
+    fsize = pdfFile.size;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const bytes = new Uint8Array(ev.target.result);
+      pdfB64 = uint8ToB64(bytes);
+      loadPDF(bytes);
+    };
+    reader.readAsArrayBuffer(pdfFile);
+  } else {
+    // 全て画像として扱う（複数ファイル可）
+    const imageFiles = files.filter(f => f.type.startsWith('image/'));
+    if (!imageFiles.length) { alert('PDF、画像、またはJSONセッションファイルを選択してください'); return; }
+    fname = imageFiles.length === 1 ? imageFiles[0].name : `${imageFiles.length}枚の画像`;
+    fsize = imageFiles.reduce((sum, f) => sum + f.size, 0);
+    await loadImages(imageFiles);
+  }
+  e.target.value = '';
+});
+
+// JSONセッション復元
+async function restoreSession(file) {
+  return new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = async ev => {
+      try {
+        const d = JSON.parse(ev.target.result);
+        if (!Array.isArray(d.highlights)) throw new Error('形式エラー');
+
+        fname = d.fileName || 'restored';
+        fileHandle = null;
+        notes = Array.isArray(d.notes) ? d.notes : [];
+        document.getElementById('saveBtn').classList.remove('linked');
+        document.getElementById('savePathTxt').textContent = '';
+
+        if (d.pdfB64) {
+          pdfB64 = d.pdfB64; imagesB64 = [];
+          await restorePDF(b64ToUint8(d.pdfB64), d.highlights);
+        } else if (Array.isArray(d.imagesB64) && d.imagesB64.length) {
+          pdfB64 = null; imagesB64 = d.imagesB64;
+          await restoreImages(d.imagesB64, d.highlights);
+        } else {
+          throw new Error('ファイルデータが見つかりません');
+        }
+        // 付箋を再描画
+        notes.forEach(n => renderNote(n));
+        toast(`復元完了（マーカー ${d.highlights.length}件、メモ ${notes.length}件）`);
+      } catch (err) {
+        alert('復元失敗: ' + err.message);
+      }
+      resolve();
+    };
+    r.readAsText(file);
+  });
+}
+
+// 画像を読み込んで各ページとして表示
+async function loadImages(files) {
+  setStatus('読み込み中…');
+  hl = []; notes = []; pageData = {};
+  resetFileHandle(); // 新規ファイルなので保存先紐付けを解除
+  const pg = document.getElementById('pdfPages');
+  document.getElementById('dropZone').style.display = 'none';
+  pg.style.display = 'flex'; pg.innerHTML = '';
+
+  // PDFBase64は無効化（画像モードは別系統で保存）
+  pdfB64 = null;
+  imagesB64 = [];
+
+  for (let i = 0; i < files.length; i++) {
+    const b64 = await fileToB64(files[i]);
+    imagesB64.push(b64);
+    await renderImagePage(b64, i + 1, pg);
+  }
+
+  setStatus(`${files.length}枚 | ${fname}`);
+  tryLoadLS(); redrawAll();
+}
+
+// 保存先ハンドルをリセット（新規ファイルを開いた時などに呼ぶ）
+function resetFileHandle() {
+  fileHandle = null;
+  hasUnsavedChanges = false; // 新規ファイルなので未保存フラグもリセット
+  const saveBtn = document.getElementById('saveBtn');
+  if (saveBtn) saveBtn.classList.remove('linked');
+  const pathTxt = document.getElementById('savePathTxt');
+  if (pathTxt) pathTxt.textContent = '';
+}
+
+function fileToB64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result); // data URL形式
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+async function renderImagePage(dataUrl, num, container) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const maxW = Math.min(window.innerWidth - 24, 960);
+      const scale = maxW / img.width;
+      const w = img.width * scale, h = img.height * scale;
+      const wrap = document.createElement('div');
+      wrap.className = 'pgwrap';
+      wrap.style.cssText = `width:${w}px;height:${h}px`;
+      const pc = document.createElement('canvas'); pc.width = w; pc.height = h;
+      const hc = document.createElement('canvas'); hc.className = 'hlc'; hc.width = w; hc.height = h;
+      const dc = document.createElement('canvas'); dc.className = 'dwc'; dc.width = w; dc.height = h;
+      wrap.append(pc, hc, dc); container.appendChild(wrap);
+      pc.getContext('2d').drawImage(img, 0, 0, w, h);
+      pageData[num] = { hc, dc, width: w, height: h };
+      attachEvents(dc, num);
+      resolve();
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+// ── PDF描画 ────────────────────────────────────────────────
+async function loadPDF(bytes) {
+  setStatus('読み込み中…');
+  hl = []; notes = []; pageData = {}; imagesB64 = [];
+  resetFileHandle(); // 新規ファイルなので保存先紐付けを解除
+  const pg = document.getElementById('pdfPages');
+  document.getElementById('dropZone').style.display = 'none';
+  pg.style.display = 'flex'; pg.innerHTML = '';
+  const doc = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const n = doc.numPages;
+  for (let p = 1; p <= n; p++) await renderPage(doc, p, pg);
+  setStatus(`${n}ページ | ${fname}`);
+  tryLoadLS(); redrawAll();
+}
+
+async function renderPage(doc, num, container) {
+  const page = await doc.getPage(num);
+  const maxW = Math.min(window.innerWidth - 24, 960);
+  const vp = page.getViewport({ scale: maxW / page.getViewport({ scale: 1 }).width });
+  const wrap = document.createElement('div');
+  wrap.className = 'pgwrap';
+  wrap.style.cssText = `width:${vp.width}px;height:${vp.height}px`;
+  const pc = mkc('', vp), hc = mkc('hlc', vp), dc = mkc('dwc', vp);
+  wrap.append(pc, hc, dc); container.appendChild(wrap);
+  await page.render({ canvasContext: pc.getContext('2d'), viewport: vp }).promise;
+  pageData[num] = { hc, dc, width: vp.width, height: vp.height };
+  attachEvents(dc, num);
+}
+
+// イベントハンドラをcanvasに装着（PDF・画像共通）
+function attachEvents(dc, num) {
+  dc.addEventListener('mousedown', e => sd(ec(e, dc), num));
+  dc.addEventListener('mousemove', e => mv(ec(e, dc), num));
+  dc.addEventListener('mouseup',   e => eu(ec(e, dc), num));
+  dc.addEventListener('mouseleave',e => { if (drawing && apage === num) eu(ec(e, dc), num); });
+  dc.addEventListener('click', e => {
+    if (suppressClick) { suppressClick = false; return; }
+    handleRevealTap(ec(e, dc), num);
+  });
+
+  dc.addEventListener('touchstart', e => {
+    if (!drawMode || e.touches.length > 1) return;
+    e.preventDefault(); sd(ec(e, dc), num);
+  }, { passive: false });
+  dc.addEventListener('touchmove', e => {
+    if (!drawMode || e.touches.length > 1) return;
+    e.preventDefault(); mv(ec(e, dc), num);
+  }, { passive: false });
+  dc.addEventListener('touchend', e => {
+    const pos = ec(e, dc);
+    suppressClick = true;
+    if (drawMode) { e.preventDefault(); eu(pos, num); }
+    else { e.preventDefault(); handleRevealTap(pos, num); }
+  }, { passive: false });
+}
+
+function mkc(cls, vp) { const c = document.createElement('canvas'); if (cls) c.className = cls; c.width = vp.width; c.height = vp.height; return c; }
+
+// 統一座標変換 — マウス・タッチ両対応、CSSズレ補正込み
+function ec(e, canvas) {
+  const r = canvas.getBoundingClientRect();
+  let cx, cy;
+  if (e.touches !== undefined) {
+    const t = e.touches[0] || e.changedTouches[0];
+    cx = t.clientX; cy = t.clientY;
+  } else {
+    cx = e.clientX; cy = e.clientY;
+  }
+  return {
+    x: (cx - r.left) * (canvas.width  / r.width),
+    y: (cy - r.top)  * (canvas.height / r.height)
+  };
+}
+function rc(a, b) { return [Math.min(a.x,b.x), Math.min(a.y,b.y), Math.abs(b.x-a.x), Math.abs(b.y-a.y)]; }
+
+function sd(pos, p) {
+  if (!drawMode) return;
+  drawing = true; apage = p; dstart = pos;
+}
+function mv(pos, p) {
+  if (!drawing || !drawMode || apage !== p) return;
+  const { dc } = pageData[p], ctx = dc.getContext('2d');
+  ctx.clearRect(0, 0, dc.width, dc.height);
+  const [x,y,w,h] = rc(dstart, pos);
+  ctx.fillStyle = 'rgba(60,200,80,.3)'; ctx.fillRect(x, y, w, h);
+}
+function eu(pos, p) {
+  if (!drawing || !drawMode || apage !== p) return; drawing = false;
+  const [x,y,w,h] = rc(dstart, pos);
+  if (w > 4 && h > 4) {
+    const pd = pageData[p];
+    // 相対座標（0〜1）で保存 — ウィンドウサイズ変更しても正しく描画できる
+    hl.push({
+      page: p, x, y, w, h, hidden: false,
+      rx: x / pd.width, ry: y / pd.height,
+      rw: w / pd.width, rh: h / pd.height
+    });
+    autoSave();
+  }
+  const { dc } = pageData[p]; dc.getContext('2d').clearRect(0, 0, dc.width, dc.height);
+  drawPage(p); dstart = null;
+}
+
+// 相対座標→絶対座標変換 — 旧データ（rxが無い）は絶対座標をそのまま返す
+function absCoords(h, p) {
+  const pd = pageData[p];
+  if (!pd) return { x: h.x, y: h.y, w: h.w, h: h.h };
+  if (typeof h.rx === 'number') {
+    return { x: h.rx * pd.width, y: h.ry * pd.height, w: h.rw * pd.width, h: h.rh * pd.height };
+  }
+  return { x: h.x, y: h.y, w: h.w, h: h.h };
+}
+
+function drawPage(p) {
+  if (!pageData[p]) return;
+  const { hc } = pageData[p], ctx = hc.getContext('2d');
+  ctx.clearRect(0, 0, hc.width, hc.height);
+
+  const testTarget = (testOn && testQueue[testIndex]) ? testQueue[testIndex].ref : null;
+
+  hl.filter(h => h.page === p).forEach(h => {
+    const isTarget = (h === testTarget);
+    const a = absCoords(h, p); // 相対座標→絶対座標
+
+    if (!redOn) {
+      const ok = h.okCount || 0, ng = h.ngCount || 0;
+      let fillStyle, strokeStyle;
+      if (ok >= 3 && ok > ng) {
+        fillStyle = 'rgba(30,170,50,.35)'; strokeStyle = 'rgba(20,130,40,.6)';
+      } else if (ng > ok) {
+        fillStyle = 'rgba(240,150,50,.35)'; strokeStyle = 'rgba(200,110,20,.55)';
+      } else {
+        fillStyle = 'rgba(50,210,70,.38)'; strokeStyle = 'rgba(30,170,50,.45)';
+      }
+      ctx.fillStyle = fillStyle; ctx.fillRect(a.x, a.y, a.w, a.h);
+      ctx.strokeStyle = strokeStyle; ctx.lineWidth = 1; ctx.strokeRect(a.x, a.y, a.w, a.h);
+    } else if (h.hidden) {
+      ctx.fillStyle = '#f4f4ee'; ctx.fillRect(a.x, a.y, a.w, a.h);
+    } else {
+      ctx.fillStyle = 'rgba(50,210,70,.25)'; ctx.fillRect(a.x, a.y, a.w, a.h);
+      ctx.strokeStyle = 'rgba(30,170,50,.5)'; ctx.lineWidth = 1.5; ctx.strokeRect(a.x, a.y, a.w, a.h);
+    }
+
+    if (isTarget) {
+      ctx.strokeStyle = '#1976d2';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(a.x - 2, a.y - 2, a.w + 4, a.h + 4);
+    }
+  });
+}
+function redrawAll() { Object.keys(pageData).forEach(p => drawPage(+p)); }
+
+// ── コントロール ───────────────────────────────────────────
+function toggleSheet() {
+  redOn = !redOn;
+  const btn = document.getElementById('toggleBtn');
+  btn.textContent = redOn ? '🟩 赤シートON' : '🟥 赤シートOFF';
+  btn.className = 'btn ' + (redOn ? 'red' : 'green');
+  if (!redOn) {
+    hl.forEach(h => h.hidden = false);
+  } else {
+    hl.forEach(h => h.hidden = true);
+  }
+  redrawAll();
+}
+
+// ── テスト機能 ────────────────────────────────────────────
+function startTest() {
+  if (testOn) { endTest(); return; }
+  if (!hl.length) { alert('マーカーがありません'); return; }
+
+  // 出題モードを選択
+  const mode = promptTestMode();
+  if (!mode) return;
+
+  // マーカーを初期化（未初期化のものに okCount/ngCount を追加）
+  hl.forEach(h => {
+    if (h.okCount === undefined) h.okCount = 0;
+    if (h.ngCount === undefined) h.ngCount = 0;
+  });
+
+  // モードに応じて出題対象を絞る
+  let targets;
+  if (mode === 'all') {
+    targets = hl.slice();
+  } else if (mode === 'weak') {
+    // 不正解数が正解数以上のもの（= まだ定着していない）
+    targets = hl.filter(h => h.ngCount >= h.okCount);
+    if (!targets.length) { alert('苦手なマーカーはありません。全部から出題します'); targets = hl.slice(); }
+  } else if (mode === 'unlearned') {
+    // 3回以上正解していないもの
+    targets = hl.filter(h => h.okCount < 3);
+    if (!targets.length) { alert('すべて習得済みです！'); return; }
+  }
+
+  // シャッフル（苦手なものほど優先的に前に出るよう加重）
+  targets.sort(() => Math.random() - 0.5);
+  targets.sort((a, b) => (b.ngCount - b.okCount) - (a.ngCount - a.okCount));
+
+  testQueue = targets.map(ref => ({ ref }));
+  testIndex = 0;
+  testScore = { ok: 0, ng: 0 };
+  testWrongList = []; // セッションで×だった項目を記録
+  testOn = true;
+
+  if (!redOn) toggleSheet();
+  hl.forEach(h => h.hidden = true);
+  redrawAll();
+
+  document.getElementById('testBtn').classList.add('on');
+  document.getElementById('testBtn').textContent = '🎯 テスト中';
+  document.getElementById('testBar').classList.add('show');
+  document.body.classList.add('testing');
+  showTestMarker();
+}
+
+function promptTestMode() {
+  const total = hl.length;
+  const weak = hl.filter(h => (h.ngCount||0) >= (h.okCount||0)).length;
+  const unlearned = hl.filter(h => (h.okCount||0) < 3).length;
+  const msg = `出題モードを選択してください:\n\n` +
+    `1: 全部（${total}件）\n` +
+    `2: 苦手だけ（${weak}件）\n` +
+    `3: 未習得だけ（${unlearned}件、3回正解で習得）\n\n` +
+    `数字を入力:`;
+  const ans = prompt(msg, '1');
+  if (!ans) return null;
+  return { '1': 'all', '2': 'weak', '3': 'unlearned' }[ans.trim()] || null;
+}
+
+function showTestMarker() {
+  if (testIndex >= testQueue.length) { finishTest(); return; }
+  updateTestBar();
+  const target = testQueue[testIndex].ref;
+  // マーカーは隠したまま（ユーザーがタップして答えを確認する）
+  target.hidden = true;
+  drawPage(target.page);
+  // 該当マーカーまでスクロール
+  const wrappers = document.querySelectorAll('.pgwrap');
+  const wrap = wrappers[target.page - 1];
+  if (wrap) {
+    const rect = wrap.getBoundingClientRect();
+    const a = absCoords(target, target.page);
+    const scrollY = window.scrollY + rect.top + a.y - window.innerHeight / 3;
+    window.scrollTo({ top: scrollY, behavior: 'smooth' });
+  }
+}
+
+function testJudge(correct) {
+  if (!testOn) return;
+  const target = testQueue[testIndex].ref;
+  if (correct) {
+    testScore.ok++;
+    target.okCount = (target.okCount||0) + 1;
+  } else {
+    testScore.ng++;
+    target.ngCount = (target.ngCount||0) + 1;
+    testWrongList.push(target);
+  }
+  target.hidden = true;
+  testIndex++;
+  drawPage(target.page); // インデックス進めた後に再描画 → 旧ターゲットの青枠が消える
+  showTestMarker();
+}
+
+function updateTestBar() {
+  document.getElementById('testProgress').textContent = `${testIndex + 1} / ${testQueue.length}`;
+  document.getElementById('testScore').textContent = `○ ${testScore.ok} / × ${testScore.ng}`;
+}
+
+function finishTest() {
+  const total = testScore.ok + testScore.ng;
+  const rate = total > 0 ? Math.round(100 * testScore.ok / total) : 0;
+
+  // 全体の学習状況
+  const learned = hl.filter(h => (h.okCount||0) >= 3).length;
+  const learnRate = hl.length > 0 ? Math.round(100 * learned / hl.length) : 0;
+
+  const wrongInSession = testScore.ng;
+  let msg = `テスト終了\n○ ${testScore.ok} / × ${testScore.ng}（正解率 ${rate}%）\n\n全体習得状況: ${learned} / ${hl.length} (${learnRate}%)`;
+
+  if (wrongInSession > 0) {
+    msg += `\n\n間違えた ${wrongInSession} 問を再テストしますか？`;
+    if (confirm(msg)) {
+      retryWrongOnes();
+      return;
+    }
+  } else {
+    alert(msg);
+  }
+  endTest();
+}
+
+// 直前のテストで×だった項目だけで再テスト
+function retryWrongOnes() {
+  if (!testWrongList.length) { endTest(); return; }
+
+  // 重複除去（同じマーカーを複数回間違えた場合）
+  const unique = [...new Set(testWrongList)];
+  unique.sort(() => Math.random() - 0.5);
+
+  testQueue = unique.map(ref => ({ ref }));
+  testIndex = 0;
+  testScore = { ok: 0, ng: 0 };
+  testWrongList = []; // 次のセッション用にリセット
+  hl.forEach(h => h.hidden = true);
+  redrawAll();
+  showTestMarker();
+}
+
+function endTest() {
+  testOn = false;
+  document.getElementById('testBtn').classList.remove('on');
+  document.getElementById('testBtn').textContent = '🎯 テスト開始';
+  document.getElementById('testBar').classList.remove('show');
+  document.body.classList.remove('testing');
+  // テスト終了時は赤シートを自動OFF（マーカーが見える状態に）
+  if (redOn) toggleSheet();
+  else redrawAll();
+  // テスト中にスキップした保存を最後に1回まとめて実行
+  autoSave();
+}
+
+// ── 統計表示 ──────────────────────────────────────────────
+function showStats() {
+  if (!hl.length) { alert('マーカーがありません'); return; }
+
+  const total = hl.length;
+  let untested = 0, learning = 0, weak = 0, mastered = 0;
+  let totalOk = 0, totalNg = 0;
+
+  hl.forEach(h => {
+    const ok = h.okCount || 0, ng = h.ngCount || 0;
+    totalOk += ok; totalNg += ng;
+    if (ok === 0 && ng === 0) untested++;
+    else if (ok >= 3 && ok > ng) mastered++;
+    else if (ng > ok) weak++;
+    else learning++;
+  });
+
+  const totalAnswers = totalOk + totalNg;
+  const overallRate = totalAnswers > 0 ? Math.round(100 * totalOk / totalAnswers) : 0;
+  const masteredRate = total > 0 ? Math.round(100 * mastered / total) : 0;
+
+  // LocalStorage使用量
+  let lsTotal = 0, lsCount = 0;
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('hlm::')) {
+        lsTotal += localStorage.getItem(k).length;
+        lsCount++;
+      }
+    }
+  } catch {}
+  const lsKB = Math.round(lsTotal / 1024);
+
+  const html = `
+    <div class="stat-row"><span class="key">ファイル名</span><span class="val">${escapeHtml(fname || '-')}</span></div>
+    <div class="stat-row"><span class="key">マーカー総数</span><span class="val">${total}</span></div>
+
+    <h3>習得状況</h3>
+    <div class="stat-bar"><div class="stat-bar-fill" style="width:${masteredRate}%"></div></div>
+    <div class="stat-row"><span class="key">習得率</span><span class="val">${masteredRate}% (${mastered} / ${total})</span></div>
+
+    <div class="stat-category"><div class="stat-dot" style="background:rgba(30,170,50,.7)"></div>習得済み(3回以上正解) — <b>${mastered}</b>件</div>
+    <div class="stat-category"><div class="stat-dot" style="background:rgba(50,210,70,.6)"></div>学習中 — <b>${learning}</b>件</div>
+    <div class="stat-category"><div class="stat-dot" style="background:rgba(240,150,50,.7)"></div>苦手(×が多い) — <b>${weak}</b>件</div>
+    <div class="stat-category"><div class="stat-dot" style="background:#ccc"></div>未テスト — <b>${untested}</b>件</div>
+
+    <h3>回答履歴（累計）</h3>
+    <div class="stat-row"><span class="key">総回答数</span><span class="val">${totalAnswers}</span></div>
+    <div class="stat-row"><span class="key">○ 正解</span><span class="val">${totalOk}</span></div>
+    <div class="stat-row"><span class="key">× 不正解</span><span class="val">${totalNg}</span></div>
+    <div class="stat-row"><span class="key">全体正解率</span><span class="val">${overallRate}%</span></div>
+
+    <h3>ブラウザ内ストレージ</h3>
+    <div class="stat-row"><span class="key">自動保存データ</span><span class="val">${lsCount}件 / ${lsKB} KB</span></div>
+    <p style="font-size:11px;color:#888;margin-top:4px;">
+      セッションファイルに保存済みならブラウザ内データは不要です。
+    </p>
+    <button onclick="clearAllLS()" style="margin-top:8px;padding:6px 14px;border:1px solid #e57373;border-radius:6px;background:#fff;color:#c33;font-size:12px;cursor:pointer;">
+      すべての自動保存データを削除
+    </button>
+  `;
+
+  document.getElementById('statsContent').innerHTML = html;
+  document.getElementById('statsModal').classList.add('open');
+}
+
+// 全LocalStorageエントリを削除
+function clearAllLS() {
+  if (!confirm('ブラウザ内に保存されている全自動保存データを削除しますか？\n（セッションファイルは削除されません）')) return;
+  try {
+    Object.keys(localStorage).forEach(k => {
+      if (k.startsWith('hlm::')) localStorage.removeItem(k);
+    });
+    toast('自動保存データを削除しました');
+    closeStats();
+  } catch (e) {
+    toast('削除失敗: ' + e.message);
+  }
+}
+
+function closeStats() {
+  document.getElementById('statsModal').classList.remove('open');
+}
+
+// ── ヘルプ ────────────────────────────────────────────────
+function showHelp() {
+  const html = `
+    <div class="help-section">
+      <h3>基本的な使い方</h3>
+      <ul>
+        <li><code>📂 ファイルを開く</code> でPDF・画像・セッションファイル（.json）を開く</li>
+        <li><code>💾 保存</code> で現在の保存先に上書き保存。初回は保存先を指定するダイアログが開く</li>
+        <li><code>📌 新規保存</code> で別の場所・別名で保存（保存先を切り替えたい時）</li>
+      </ul>
+      <p style="margin-top:6px;font-size:12px;color:#888;">
+        ※ 自動上書き保存が効くのは <b>Chrome / Edge</b> のみ。<br>
+        Firefox や iPad Safari では保存のたびに新しいファイルがダウンロードされる仕様です。
+      </p>
+    </div>
+
+    <div class="help-section">
+      <h3>マーカーを引く</h3>
+      <ul>
+        <li><code>✏️ 描画ON</code> にしてドラッグで緑マーカーを引く</li>
+        <li>スマホ・iPadでは描画OFFの間はスクロール・ピンチズーム可能</li>
+        <li><code>🧽 消しゴムON</code> にしてマーカーをタップで削除</li>
+        <li><code>↩</code> で直前のマーカー取り消し、<code>🗑</code> で全消去</li>
+      </ul>
+    </div>
+
+    <div class="help-section">
+      <h3>赤シート機能</h3>
+      <ul>
+        <li><code>🟥 赤シートON</code> で全マーカーが白く隠れる</li>
+        <li>マーカーをタップすると個別に答えが表示される</li>
+        <li>赤シートOFFで全部戻る</li>
+      </ul>
+    </div>
+
+    <div class="help-section">
+      <h3>テスト機能</h3>
+      <ul>
+        <li><code>🎯 テスト開始</code> で暗記テスト開始（モード選択あり）</li>
+        <li>青枠で示されたマーカーが出題対象。答えを思い浮かべてタップで確認</li>
+        <li>○×ボタンで自己判定 → 統計に記録される</li>
+        <li>終了時に正解率と再テストの提案が出る</li>
+      </ul>
+    </div>
+
+    <div class="help-section">
+      <h3>マーカーの色の意味</h3>
+      <div style="font-size:13px;line-height:1.9;color:#444;">
+        <div><span class="help-color-sample" style="background:rgba(50,210,70,.6)"></span><b>通常の緑</b> — 未テスト or 学習中</div>
+        <div><span class="help-color-sample" style="background:rgba(30,170,50,.7)"></span><b>濃い緑</b> — 習得済み（3回以上正解）</div>
+        <div><span class="help-color-sample" style="background:rgba(240,150,50,.7)"></span><b>オレンジ</b> — 苦手（×の方が多い）</div>
+        <div><span class="help-color-sample" style="background:#1976d2"></span><b>青い太枠</b> — テスト中の出題対象</div>
+      </div>
+    </div>
+
+    <div class="help-section">
+      <h3>メモ機能</h3>
+      <ul>
+        <li><code>📝 メモ追加</code> で現在ページに付箋メモを追加</li>
+        <li>ドラッグで好きな位置に移動</li>
+        <li>ダブルクリック（タッチデバイスは長押し）で編集</li>
+        <li>マウスオーバーで右上に出る <code>×</code> で削除</li>
+      </ul>
+    </div>
+
+    <div class="help-section">
+      <h3>統計</h3>
+      <p><code>📊 統計</code> で現在のファイルの習得状況・回答履歴を確認できる。</p>
+    </div>
+
+    <div class="help-section">
+      <h3>複数デバイスで使う</h3>
+      <p>保存したJSONファイルを <b>iCloud Drive・Google Drive・AirDrop・LINE・メール添付</b> など何らかの手段で別のデバイスに送れば、そのデバイスで「ファイルを開く」から復元できます。</p>
+    </div>
+  `;
+  document.getElementById('helpContent').innerHTML = html;
+  document.getElementById('helpModal').classList.add('open');
+}
+
+function closeHelp() {
+  document.getElementById('helpModal').classList.remove('open');
+}
+
+// ── 付箋メモ ────────────────────────────────────────────
+function addNote() {
+  if (!Object.keys(pageData).length) { alert('PDF・画像を開いてください'); return; }
+  // 現在ビューポート中央に一番近いページを対象にする
+  const viewCenterY = window.scrollY + window.innerHeight / 2;
+  let targetPage = 1, minDist = Infinity;
+  document.querySelectorAll('.pgwrap').forEach((wrap, i) => {
+    const rect = wrap.getBoundingClientRect();
+    const pageCenter = window.scrollY + rect.top + rect.height / 2;
+    const dist = Math.abs(pageCenter - viewCenterY);
+    if (dist < minDist) { minDist = dist; targetPage = i + 1; }
+  });
+
+  const note = {
+    id: Date.now() + Math.random(),
+    page: targetPage,
+    x: 30, y: 30,
+    text: ''
+  };
+  notes.push(note);
+  renderNote(note);
+  // 作成直後に編集モードにする
+  const el = document.querySelector(`[data-note-id="${CSS.escape(String(note.id))}"]`);
+  if (el) startEdit(el, note);
+  autoSave();
+}
+
+// 付箋DOM生成
+function renderNote(note) {
+  const wrappers = document.querySelectorAll('.pgwrap');
+  const wrap = wrappers[note.page - 1];
+  if (!wrap) return;
+
+  const el = document.createElement('div');
+  el.className = 'sticky-note';
+  el.dataset.noteId = note.id;
+  el.style.left = note.x + 'px';
+  el.style.top  = note.y + 'px';
+  el.textContent = note.text;
+
+  const delBtn = document.createElement('button');
+  delBtn.className = 'sticky-note-delete';
+  delBtn.textContent = '×';
+  delBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    deleteNote(note.id);
+  });
+  el.appendChild(delBtn);
+
+  attachNoteDrag(el, note);
+  attachNoteEdit(el, note);
+
+  wrap.appendChild(el);
+}
+
+function deleteNote(id) {
+  notes = notes.filter(n => n.id !== id);
+  const el = document.querySelector(`[data-note-id="${CSS.escape(String(id))}"]`);
+  if (el) el.remove();
+  autoSave();
+}
+
+function attachNoteDrag(el, note) {
+  let dragging = false, offX = 0, offY = 0, moved = false;
+
+  const start = (clientX, clientY) => {
+    if (el.classList.contains('editing')) return false;
+    const rect = el.getBoundingClientRect();
+    offX = clientX - rect.left;
+    offY = clientY - rect.top;
+    dragging = true;
+    moved = false;
+    return true;
+  };
+  const move = (clientX, clientY) => {
+    if (!dragging) return;
+    const wrapRect = el.parentElement.getBoundingClientRect();
+    let nx = clientX - wrapRect.left - offX;
+    let ny = clientY - wrapRect.top  - offY;
+    nx = Math.max(0, Math.min(wrapRect.width  - el.offsetWidth,  nx));
+    ny = Math.max(0, Math.min(wrapRect.height - el.offsetHeight, ny));
+    el.style.left = nx + 'px';
+    el.style.top  = ny + 'px';
+    moved = true;
+  };
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    if (moved) {
+      note.x = parseFloat(el.style.left);
+      note.y = parseFloat(el.style.top);
+      autoSave();
+    }
+  };
+
+  el.addEventListener('mousedown', e => {
+    if (e.target.classList.contains('sticky-note-delete')) return;
+    if (start(e.clientX, e.clientY)) e.preventDefault();
+  });
+  window.addEventListener('mousemove', e => move(e.clientX, e.clientY));
+  window.addEventListener('mouseup', end);
+
+  el.addEventListener('touchstart', e => {
+    if (e.target.classList.contains('sticky-note-delete')) return;
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    if (start(t.clientX, t.clientY)) e.preventDefault();
+  }, { passive: false });
+  el.addEventListener('touchmove', e => {
+    if (!dragging) return;
+    const t = e.touches[0];
+    move(t.clientX, t.clientY); e.preventDefault();
+  }, { passive: false });
+  el.addEventListener('touchend', end);
+}
+
+function attachNoteEdit(el, note) {
+  el.addEventListener('dblclick', () => startEdit(el, note));
+  // タッチデバイス向け: 長押しで編集開始
+  let pressTimer;
+  el.addEventListener('touchstart', () => {
+    pressTimer = setTimeout(() => startEdit(el, note), 600);
+  });
+  el.addEventListener('touchend', () => clearTimeout(pressTimer));
+  el.addEventListener('touchmove', () => clearTimeout(pressTimer));
+}
+
+function startEdit(el, note) {
+  el.classList.add('editing');
+  el.contentEditable = 'true';
+  // 削除ボタンは編集中も残したいが、テキストに含まれないよう別管理
+  const delBtn = el.querySelector('.sticky-note-delete');
+  if (delBtn) delBtn.remove();
+  el.textContent = note.text;
+  el.focus();
+  // カーソルを末尾へ
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(range);
+
+  const finish = () => {
+    el.classList.remove('editing');
+    el.contentEditable = 'false';
+    note.text = el.textContent.trim();
+    el.textContent = note.text;
+    // 削除ボタンを再追加
+    const delBtn = document.createElement('button');
+    delBtn.className = 'sticky-note-delete';
+    delBtn.textContent = '×';
+    delBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      deleteNote(note.id);
+    });
+    el.appendChild(delBtn);
+    autoSave();
+    el.removeEventListener('blur', finish);
+  };
+  el.addEventListener('blur', finish);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// モーダル外クリックで閉じる
+document.getElementById('statsModal').addEventListener('click', e => {
+  if (e.target.id === 'statsModal') closeStats();
+});
+document.getElementById('helpModal').addEventListener('click', e => {
+  if (e.target.id === 'helpModal') closeHelp();
+});
+
+// タップ処理 — 消しゴムモード / 赤シート個別表示 / テストモード
+function handleRevealTap(pos, p) {
+  if (drawMode) return;
+  const pad = 8;
+  const hits = hl.filter(h => {
+    if (h.page !== p) return false;
+    const a = absCoords(h, p);
+    return pos.x >= a.x - pad && pos.x <= a.x + a.w + pad &&
+           pos.y >= a.y - pad && pos.y <= a.y + a.h + pad;
+  });
+  if (!hits.length) return;
+  const target = hits[hits.length - 1];
+
+  if (eraseMode) {
+    const idx = hl.indexOf(target);
+    if (idx >= 0) hl.splice(idx, 1);
+    autoSave();
+    drawPage(p);
+    return;
+  }
+  // テスト中は出題対象のマーカーしか開けない
+  if (testOn) {
+    const testTarget = testQueue[testIndex] ? testQueue[testIndex].ref : null;
+    if (target !== testTarget) return;
+    target.hidden = !target.hidden;
+    drawPage(p);
+    return;
+  }
+  if (redOn) {
+    target.hidden = !target.hidden;
+    drawPage(p);
+  }
+}
+function undoLast() { if (!hl.length) return; const l = hl.pop(); autoSave(); drawPage(l.page); }
+function clearAll() {
+  if (!hl.length) return;
+  if (!confirm('全マーカーを消去しますか？')) return;
+  const ps = [...new Set(hl.map(h => h.page))];
+  hl = []; autoSave(); ps.forEach(p => drawPage(p));
+}
+
+// ── 保存 ──────────────────────────────────────────────────
+function buildPayload() {
+  return JSON.stringify({
+    version: 3,
+    fileName: fname,
+    pdfB64,
+    imagesB64,
+    highlights: hl,
+    notes
+  }, null, 2);
+}
+async function autoSave() {
+  // 変更があったことを記録（fileHandle無しなら未保存扱い）
+  hasUnsavedChanges = true;
+
+  if (fileHandle) {
+    try {
+      const perm = await fileHandle.queryPermission({ mode: 'readwrite' });
+      if (perm === 'granted') {
+        await writeToHandle(fileHandle, buildPayload());
+        showBadge('✓ 自動保存');
+        hasUnsavedChanges = false;
+        clearLSForCurrentFile(); // ファイル保存済みならLS不要
+      } else {
+        tryWriteLS();
+        showBadge('⚠ 権限切れ — 保存ボタンで再保存を');
+      }
+    } catch (e) { tryWriteLS(); }
+  } else {
+    tryWriteLS();
+  }
+}
+
+// 上書き保存 — 保存先未指定なら自動的に新規保存にフォールバック
+async function saveOverwrite() {
+  if (!fname) { alert('ファイルが開かれていません。'); return; }
+
+  if (fileHandle) {
+    try {
+      const perm = await fileHandle.queryPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') {
+        const req = await fileHandle.requestPermission({ mode: 'readwrite' });
+        if (req !== 'granted') { toast('書き込み権限が拒否されました'); return; }
+      }
+      await writeToHandle(fileHandle, buildPayload());
+      hasUnsavedChanges = false;
+      clearLSForCurrentFile(); // ファイル保存済みならLS不要
+      showBadge('✓ 上書き保存'); toast(`保存: ${fileHandle.name}`);
+      return;
+    } catch (e) {
+      toast('上書き失敗、新規保存に切り替えます');
+      resetFileHandle();
+    }
+  }
+  // 保存先未指定の場合は新規保存
+  await saveAsNew();
+}
+
+// 新規保存 — 必ず保存先を指定させる
+async function saveAsNew() {
+  if (!fname) { alert('ファイルが開かれていません。'); return; }
+
+  if (FS_API) {
+    try {
+      const base = fname.replace(/(_session)?\.(pdf|png|jpe?g|webp|gif|json)$/i, '');
+      const h = await window.showSaveFilePicker({
+        suggestedName: base + '_session.json',
+        types: [{ description: 'セッションファイル', accept: { 'application/json': ['.json'] } }]
+      });
+      await writeToHandle(h, buildPayload());
+      fileHandle = h;
+      hasUnsavedChanges = false;
+      clearLSForCurrentFile(); // ファイル保存済みならLSは不要
+      document.getElementById('saveBtn').classList.add('linked');
+      document.getElementById('savePathTxt').textContent = '📍 ' + h.name;
+      showBadge('✓ 保存しました'); toast(`保存: ${h.name}`);
+    } catch (e) { if (e.name !== 'AbortError') toast('保存失敗: ' + e.message); }
+  } else {
+    fallbackDL();
+    hasUnsavedChanges = false;
+    clearLSForCurrentFile();
+    toast('このブラウザは保存先指定未対応。ダウンロードしました');
+  }
+}
+
+// 現在のファイルに対応するLocalStorageエントリを削除
+function clearLSForCurrentFile() {
+  const k = lsKey();
+  if (k) {
+    try { localStorage.removeItem(k); } catch {}
+  }
+}
+async function writeToHandle(h, text) {
+  const w = await h.createWritable();
+  await w.write(text);
+  await w.close();
+}
+function fallbackDL() {
+  const base = (fname || 's').replace(/(_session)?\.(pdf|png|jpe?g|webp|gif|json)$/i, '');
+  const blob = new Blob([buildPayload()], { type: 'application/json' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: base + '_session.json' });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ── 復元ヘルパ ────────────────────────────────────────────
+async function restorePDF(bytes, savedHL) {
+  setStatus('復元中…'); pageData = {};
+  const pg = document.getElementById('pdfPages');
+  document.getElementById('dropZone').style.display = 'none';
+  pg.style.display = 'flex'; pg.innerHTML = '';
+  const doc = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const n = doc.numPages;
+  for (let p = 1; p <= n; p++) await renderPage(doc, p, pg);
+  hl = savedHL;
+  migrateHighlightsToRelative();
+  setStatus(`${n}ページ | ${fname}`); redrawAll();
+}
+
+async function restoreImages(images, savedHL) {
+  setStatus('復元中…'); pageData = {};
+  const pg = document.getElementById('pdfPages');
+  document.getElementById('dropZone').style.display = 'none';
+  pg.style.display = 'flex'; pg.innerHTML = '';
+  for (let i = 0; i < images.length; i++) {
+    await renderImagePage(images[i], i + 1, pg);
+  }
+  hl = savedHL;
+  migrateHighlightsToRelative();
+  setStatus(`${images.length}枚 | ${fname}`); redrawAll();
+}
+
+// 旧データ（絶対座標のみ）を相対座標に変換
+// 注意: この時点のウィンドウ幅で計算されるため、必ず最初の描画時のサイズを基準にする
+function migrateHighlightsToRelative() {
+  hl.forEach(h => {
+    if (typeof h.rx === 'number') return; // 既に変換済み
+    const pd = pageData[h.page];
+    if (!pd) return;
+    h.rx = h.x / pd.width;
+    h.ry = h.y / pd.height;
+    h.rw = h.w / pd.width;
+    h.rh = h.h / pd.height;
+  });
+}
+
+// ── LocalStorage フォールバック ───────────────────────────
+function lsKey() {
+  // ファイル名 + サイズで一意化（同名違いファイルの誤復元を防ぐ）
+  return fname ? `hlm::${fname}::${fsize}` : null;
+}
+function tryWriteLS() {
+  const k = lsKey(); if (!k) return;
+  // 自動保存は軽量化のためPDF本体は含めない
+  // （同じファイルを再度開いたとき、ファイル名+サイズが一致すれば座標が復元される）
+  try {
+    localStorage.setItem(k, JSON.stringify({
+      fileName: fname,
+      fsize,
+      highlights: hl,
+      notes
+    }));
+    showBadge('✓ 自動保存');
+  } catch {
+    toast('LocalStorage容量不足。統計画面からデータを整理してください。');
+  }
+}
+function tryLoadLS() {
+  const k = lsKey(); if (!k) return;
+  try {
+    const r = localStorage.getItem(k);
+    if (r) {
+      const d = JSON.parse(r);
+      hl = d.highlights || [];
+      notes = d.notes || [];
+      notes.forEach(n => renderNote(n));
+      showBadge('✓ 自動復元');
+    }
+  } catch {}
+}
+
+// ── Utils ─────────────────────────────────────────────────
+function uint8ToB64(bytes) {
+  let bin = ''; const c = 8192;
+  for (let i = 0; i < bytes.length; i += c) bin += String.fromCharCode(...bytes.subarray(i, i+c));
+  return btoa(bin);
+}
+function b64ToUint8(b64) { const bin = atob(b64), out = new Uint8Array(bin.length); for (let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; }
+function setStatus(t) { document.getElementById('statusTxt').textContent = t; }
+function toast(msg) { const el=document.getElementById('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),3000); }
+function showBadge(msg='✓ 保存済') { const b=document.getElementById('badge'); b.textContent=msg; b.classList.add('show'); clearTimeout(bTimer); bTimer=setTimeout(()=>b.classList.remove('show'),2500); }
+</script>
+</body>
+</html>
