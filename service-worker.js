@@ -1,6 +1,6 @@
 // ── Service Worker ─────────────────────────────────────────
 // キャッシュのバージョン — 更新時は番号を変えると古いキャッシュを破棄できる
-const CACHE_NAME = 'pdf-marker-v23';
+const CACHE_NAME = 'pdf-marker-v24';
 
 // オフラインで必要なファイルリスト
 const CACHE_URLS = [

@@ -13,6 +13,9 @@
 <script src="pdf.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* プルダウン更新（引っ張ってリロード）を無効化。
+   作業中に誤って画面をリロードしてしまい、未保存のマーカーが消える事故を防ぐ */
+html, body { overscroll-behavior-y: none; }
 body { background: #f0f0ec; font-family: 'Helvetica Neue', sans-serif; min-height: 100vh; }
 
 /* ── Toolbar ── */
